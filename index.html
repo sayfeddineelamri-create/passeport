@@ -622,12 +622,37 @@ label{font-size:.86rem;font-weight:700;color:var(--muted);display:grid;gap:.3rem
   .in-n{width:3.9rem}
   .tbl th,.tbl td{padding:.45rem .4rem}
 }
+
+/* ---------- écran de connexion ---------- */
+.login{position:fixed;inset:0;z-index:200;overflow:auto;display:grid;place-items:center;padding:24px 16px;
+  background:var(--bg);background-image:linear-gradient(var(--grid-line) 1px,transparent 1px),linear-gradient(90deg,var(--grid-line) 1px,transparent 1px);background-size:22px 22px}
+.login-card{width:100%;max-width:400px;background:var(--surface);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow);padding:28px 24px;display:flex;flex-direction:column;gap:14px}
+.login-card img{width:56px;height:56px}
+.login-card h1{font-family:var(--display);font-size:1.6rem;line-height:1.15;margin:0;text-wrap:balance;color:var(--ink)}
+.login-card p{margin:0;color:var(--muted);line-height:1.5}
+.login-card label{font-weight:700;color:var(--ink)}
+.login-card .in{font-size:1.25rem;letter-spacing:.18em;text-transform:uppercase;text-align:center;padding:.7rem}
+.login-card .btn{width:100%}
+.login-err{min-height:1.3em;color:var(--red);font-size:.92rem}
+.login-demo{background:none;border:0;color:var(--blue);text-decoration:underline;padding:0;font:inherit;align-self:center;cursor:pointer}
 </style>
 </head>
 <body>
+<div class="login" id="login" hidden>
+  <form class="login-card" id="login-form" autocomplete="off">
+    <img id="login-logo" alt="Sigma F">
+    <h1>Passeport élève Sigma F</h1>
+    <p>Entre le code personnel à 8 caractères que Sigma F t'a envoyé.</p>
+    <label for="login-code">Ton code</label>
+    <input class="in" id="login-code" name="code" maxlength="12" inputmode="text" autocapitalize="characters" spellcheck="false" placeholder="ABCD2345" required>
+    <div class="login-err" id="login-err" role="alert"></div>
+    <button class="btn" type="submit">Se connecter</button>
+    <button class="login-demo" type="button" id="login-demo">Voir un exemple de passeport</button>
+  </form>
+</div>
 <div class="demo" id="demo" role="note"><span><b>Exemple</b> · élève fictif, saisies d'exemple</span>
   <label for="demo-level" style="display:flex;flex-direction:row;align-items:center;color:inherit">Niveau<select id="demo-level"><option value="2nde">Seconde</option><option value="1re">Première</option><option value="tle">Terminale</option></select></label>
-  <button class="btn btn-sm" data-act="profil" type="button">J'ai mon code</button>
+  <button class="btn btn-sm" data-act="connexion" type="button">J'ai mon code</button>
 </div>
 <div class="app">
   <aside class="side" aria-label="Onglets du passeport">
@@ -2797,7 +2822,8 @@ document.addEventListener("click", e => {
   if (b.dataset.edtDel) { const k = Number(b.dataset.edtDel), x = S.edt[k]; S.edt.splice(k, 1); save(); toast(`Créneau « ${x[3]} » supprimé`); return render(); }
   const a = b.dataset.act;
   if (a === "profil") return openSheet(profilSheet());
-  if (a === "deconnexion") { delete ST.jeton; BASE.eleves = BASE.eleves.filter(e => /^exemple-/.test(e.code)); setEleve("exemple-" + (NIV === "tle" ? "tle" : NIV)); closeSheet(); toast("Déconnecté"); return render(true); }
+  if (a === "connexion") return montrerConnexion();
+  if (a === "deconnexion") { delete ST.jeton; save(); BASE.eleves = BASE.eleves.filter(e => /^exemple-/.test(e.code)); setEleve("exemple-1re"); closeSheet(); montrerConnexion(); return render(true); }
   if (a === "reset-ex" || a === "reset") { ST.saisies[EL.code] = a === "reset-ex" ? clone(EXEMPLE_SAISIE[EL.code] || {}) : {}; ST.vus[EL.code] = {}; setEleve(EL.code); closeSheet(); toast("C'est fait"); return render(); }
 });
 document.addEventListener("keydown", e => {
@@ -2857,12 +2883,34 @@ async function chargerVoix() {
 }
 
 /* ---------- démarrage ---------- */
+function montrerConnexion(msg) {
+  $("login").hidden = false; document.body.classList.add("noscroll");
+  $("login-err").textContent = msg || "";
+  const l = document.querySelector(".top img"); if (l) $("login-logo").src = l.src;
+  setTimeout(() => $("login-code").focus(), 50);
+}
+function cacherConnexion() { $("login").hidden = true; document.body.classList.remove("noscroll"); }
+$("login-demo").onclick = () => { setEleve("exemple-1re"); SUB = {}; VIEW = "sommaire"; cacherConnexion(); render(true); };
+$("login-form").addEventListener("submit", e => {
+  e.preventDefault();
+  const code = $("login-code").value.trim(), err = $("login-err");
+  if (/^exemple/i.test(code)) { $("login-demo").onclick(); return; }
+  if (!API) { err.textContent = "La connexion par code ouvre bientôt. En attendant, découvre l'exemple."; return; }
+  err.textContent = "Vérification…";
+  connexionApi(code)
+    .then(p => { if (ouvrirPasseport(p)) { SUB = {}; VIEW = "sommaire"; cacherConnexion(); render(true); toast("Bienvenue " + EL.prenom + " !"); } else err.textContent = ""; })
+    .catch(x => { err.textContent = x.message; });
+});
 (function start() {
   const h = decodeURIComponent((location.hash || "").slice(1));
-  setEleve(eleve(h) ? h : (ST.code && eleve(ST.code) ? ST.code : "exemple-1re"));
+  const demo = h === "demo" || /^exemple-/.test(h);
+  setEleve(eleve(h) ? h : "exemple-1re");
   render();
   chargerVoix().then(() => { if (VIEW === "videos") render(); });
-  rechargerApi();
+  if (!demo) {
+    if (API && ST.jeton) { montrerConnexion("Connexion…"); rechargerApi().then(() => { if (!estExemple()) cacherConnexion(); else montrerConnexion(); }); }
+    else montrerConnexion();
+  }
   window.addEventListener("hashchange", () => { const c = decodeURIComponent(location.hash.slice(1)); if (eleve(c) && c !== EL.code) { setEleve(c); SUB = {}; VIEW = "sommaire"; render(true); } });
 })();
 
