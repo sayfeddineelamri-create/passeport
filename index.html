@@ -626,7 +626,22 @@ label{font-size:.86rem;font-weight:700;color:var(--muted);display:grid;gap:.3rem
 /* ---------- annonces et ressources de l'équipe ---------- */
 .annonces{border-left:4px solid var(--red);display:flex;flex-direction:column;gap:.6rem;margin-bottom:1rem}
 .annonces p{margin:0;line-height:1.5}
-.res-eq{margin:.5rem 0 0;padding-left:1.1rem;display:flex;flex-direction:column;gap:.35rem}
+.res-eq{margin:.5rem 0 0;padding-left:0;list-style:none;display:flex;flex-direction:column;gap:.45rem}
+.devoirs{margin-bottom:1rem}
+.dv-list{list-style:none;margin:.6rem 0 0;padding:0;display:flex;flex-direction:column;gap:.7rem}
+.dv{display:flex;flex-wrap:wrap;justify-content:space-between;gap:.5rem;padding-top:.6rem;border-top:1px solid var(--line)}
+.dv:first-child{border-top:0;padding-top:0}
+.dv p{margin:.2rem 0 0}
+.dv-act{display:flex;gap:.4rem;align-items:center}
+.dv-retard{color:var(--red);font-weight:700}
+.pill-ok{color:var(--green);background:var(--green-soft);border-radius:999px;padding:.2rem .6rem;font-size:.85rem;font-weight:700}
+.doc-form{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr));gap:.8rem;margin-top:.6rem}
+.doc-form label{display:flex;flex-direction:column;gap:.3rem;font-weight:700;font-size:.92rem;min-width:0}
+.doc-form .full{grid-column:1/-1}
+.doc-form[inert]{opacity:.45;pointer-events:none}
+.doc-ex{display:flex;flex-wrap:wrap;gap:.8rem;align-items:center;justify-content:space-between;background:var(--surface-2,var(--bg));border:1px dashed var(--line);border-radius:12px;padding:.9rem 1rem;margin-top:.6rem}
+.doc-ex p{margin:0;flex:1 1 260px}
+.doc-drop input[type=file]{padding:.9rem;border-style:dashed}
 /* ---------- écran de connexion ---------- */
 .login{position:fixed;inset:0;z-index:200;overflow:auto;display:grid;place-items:center;padding:24px 16px;
   background:var(--bg);background-image:linear-gradient(var(--grid-line) 1px,transparent 1px),linear-gradient(90deg,var(--grid-line) 1px,transparent 1px);background-size:22px 22px}
@@ -2330,7 +2345,9 @@ function ouvrirPasseport(p) {
   if (p.saisies && p.saisies.data && (!loc || !(loc._maj > p.saisies.maj))) ST.saisies[p.eleve.code] = p.saisies.data;
   COMMUN = p.commun || COMMUN;
   appliquerCommun(p.eleve.niveau);
-  setEleve(p.eleve.code);
+  MES_DOCS = p.documents || [];
+  chargement = true; setEleve(p.eleve.code); chargement = false;
+  appliquerSeances();
   dernierEnvoi = corpsSaisies();
   return true;
 }
@@ -2355,10 +2372,10 @@ async function rechargerApi() {
   } catch (e) { if (e.expire) { delete ST.jeton; save(); } /* sinon hors ligne : on garde l'affichage actuel */ }
 }
 /* envoi des saisies de l'élève (notes au lycée, emploi du temps, BAC, entretien) 4 s après la dernière modification */
-let dernierEnvoi = "", minuterieEnvoi = null;
+let dernierEnvoi = "", minuterieEnvoi = null, chargement = false;
 function corpsSaisies() { const c = Object.assign({}, S || {}); delete c._maj; return JSON.stringify(c); }
 function apresSave() {
-  if (!API || !ST.jeton || !EL || estExemple()) return;
+  if (chargement || !API || !ST.jeton || !EL || estExemple()) return;
   const c = corpsSaisies(); if (c === dernierEnvoi) return;
   dernierEnvoi = c; S._maj = Date.now();
   try { localStorage.setItem(KEY, JSON.stringify(ST)); } catch (e) { }
@@ -2381,7 +2398,7 @@ function annoncesHtml() {
 }
 function ressourcesEquipeHtml() {
   const r = (COMMUN.ressources || []).filter(x => pourMoi(x.niveau) && /^https:\/\//.test(x.url || ""));
-  return r.length ? `<section class="card top-gap"><h2>Ajouté par l'équipe Sigma F</h2><ul class="res-eq">${r.map(x => `<li><a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.titre)}</a>${x.type ? ` <span class="muted small">· ${esc(x.type)}</span>` : ""}</li>`).join("")}</ul></section>` : "";
+  return r.length ? `<section class="card top-gap"><h2>Ajouté par l'équipe Sigma F</h2><ul class="res-eq">${r.map(x => `<li><a href="${esc(x.url)}" target="_blank" rel="noopener">${icoRes(x.type)} ${esc(x.titre)}</a>${x.chapitre || x.type ? ` <span class="muted small">· ${esc([x.chapitre, x.type].filter(Boolean).join(" · "))}</span>` : ""}</li>`).join("")}</ul></section>` : "";
 }
 const groupe = () => BASE.groupes[EL.groupe] || { nom: "", intervenant: "", lieu: "" };
 const estExemple = () => /^exemple-/.test(EL.code);
@@ -2391,9 +2408,11 @@ function seancesDe(a) {
   const det = (SEANCES[NIV] || {})[a.id];
   return a.dates.map((iso, k) => {
     const sam = D(iso).getDay() === 6;
-    const h = sam ? a.horaires.sam : a.horaires.sem;
-    const t = det && det[k] ? det[k] : null;
+    const o = a.perso ? a.perso[iso] : null;      // séance réglée par l'équipe (classeur Contenus, onglet Séances)
+    const h = o && o.debut ? [o.debut, o.fin || o.debut] : sam ? a.horaires.sam : a.horaires.sem;
+    const t = o && o.titre ? [o.titre, o.evaluation || ""] : det && det[k] ? det[k] : null;
     let titre = t ? t[0] : `Séance ${k + 1}`, ev = t ? t[1] : "";
+    if (o && o.annulee) { titre = "Séance annulée" + (o.titre ? " · " + o.titre : ""); ev = ""; }
     if (!t && k === 0) { titre = "Accueil et QCM d'intégration"; ev = "QCM d'intégration"; }
     if (!t && k === a.dates.length - 1) { titre = "Bilan et QCM de clôture"; ev = "QCM de clôture"; }
     return { n: k + 1, iso, debut: h[0], fin: h[1], titre, ev, interro: t && t[2] ? t[2] : "", action: a };
@@ -2812,9 +2831,125 @@ function vEntretien() {
    NAVIGATION, RENDU, ÉVÉNEMENTS
    ====================================================================== */
 const RENDER = { sommaire: vSommaire, presentation: vPresentation, tableau: vTableau, planning: vPlanning, ressources: vRessources, videos: vVideos, notes: vNotes, actions: vActions, bac: vBac, entretien: vEntretien };
-RENDER.sommaire = (f => () => annoncesHtml() + f())(RENDER.sommaire);
+RENDER.sommaire = (f => () => annoncesHtml() + devoirsHtml(true) + f())(RENDER.sommaire);
 RENDER.tableau = (f => () => annoncesHtml() + f())(RENDER.tableau);
 RENDER.ressources = (f => () => f() + ressourcesEquipeHtml())(RENDER.ressources);
+/* ======================================================================
+   Contenus de l'équipe (classeur « Contenus du passeport ») et documents de l'élève
+   ====================================================================== */
+let MES_DOCS = [], DEVOIR_A_RENDRE = "";
+const TYPES_RES = { video: "🎬", vidéo: "🎬", cours: "📘", fiche: "📄", exercice: "✏️", exercices: "✏️", livret: "📗", corrige: "✅", corrigé: "✅" };
+const icoRes = t => TYPES_RES[String(t || "").toLowerCase()] || "🔗";
+
+/* emploi du temps modifié par l'équipe : les lignes « Séances » d'une action remplacent son calendrier */
+function appliquerSeances() {
+  const lignes = (COMMUN.seances || []);
+  if (!lignes.length) return;
+  ACTIONS.forEach(a => {
+    const l = lignes.filter(s => s.action === a.id || (a.id === "ob" && /^ob/.test(s.action))).sort((x, y) => x.date.localeCompare(y.date));
+    if (!l.length) return;
+    a.dates = l.map(s => s.date);
+    a.perso = Object.fromEntries(l.map(s => [s.date, s]));
+    a.periode = `du ${fdateC(a.dates[0])} au ${fdateC(a.dates[a.dates.length - 1])}`;
+  });
+  // séances hors actions prévues (stage, rattrapage…) : une action « Autres séances »
+  const autres = lignes.filter(s => !ACTIONS.some(a => a.perso && a.perso[s.date] === s)).sort((x, y) => x.date.localeCompare(y.date));
+  if (autres.length) ACTIONS.push({ id: "autre", nom: "Autres séances Sigma", court: "Autres", famille: "sigmaup", dates: autres.map(s => s.date),
+    horaires: HORAIRES.sigmaup, periode: `du ${fdateC(autres[0].date)} au ${fdateC(autres[autres.length - 1].date)}`, perso: Object.fromEntries(autres.map(s => [s.date, s])) });
+}
+
+/* « À faire » : devoirs donnés par l'équipe */
+function devoirsHtml(court) {
+  const d = (COMMUN.devoirs || []).filter(x => !x.limite || x.limite >= TODAY || !rendu(x.id));
+  if (!d.length) return "";
+  const l = court ? d.slice(0, 3) : d;
+  return `<section class="card devoirs" aria-label="À faire"><div class="row-between"><h2>✏️ À faire</h2>${court && d.length > 3 ? `<button class="btn btn-sm btn-ghost" data-go="documents">Tout voir</button>` : ""}</div>
+    <ul class="dv-list">${l.map(x => `<li class="dv"><div><b>${esc(x.titre)}</b>${x.limite ? ` <span class="${x.limite < TODAY ? "dv-retard" : "muted"} small">· à rendre le ${esc(fdateC(x.limite))}</span>` : ""}
+      ${x.consigne ? `<p class="small">${esc(x.consigne)}</p>` : ""}</div>
+      <div class="dv-act">${x.url ? `<a class="btn btn-sm btn-ghost" href="${esc(x.url)}" target="_blank" rel="noopener">Sujet</a>` : ""}
+      ${x.rendu ? (rendu(x.id) ? `<span class="pill-ok">Rendu ✓</span>` : `<button class="btn btn-sm" data-rendre="${esc(x.id)}">Rendre</button>`) : ""}</div></li>`).join("")}</ul></section>`;
+}
+const rendu = id => MES_DOCS.some(d => d.devoir === id);
+function fdateC(iso) { const d = D(iso); return `${JOURS[d.getDay()]} ${d.getDate()} ${MOIS_C[d.getMonth()]}`; }
+
+/* 📎 Mes documents : photos et PDF envoyés à l'équipe */
+function vDocuments() {
+  const devs = (COMMUN.devoirs || []).filter(x => x.rendu);
+  const ex = estExemple() || !API;
+  return head("📎", "Mes documents", "Envoie à l'équipe Sigma F tes contrôles du lycée et tes devoirs : prends-les en photo ou ajoute un PDF.") +
+  devoirsHtml(false) +
+  `<section class="card top-gap"><h2>Envoyer un document</h2>
+   ${ex ? `<div class="doc-ex"><p><b>Tu es sur le passeport d'exemple.</b> Pour envoyer une photo ou un PDF à l'équipe, connecte-toi avec ton code personnel.</p><button class="btn" data-act="connexion" type="button">J'ai mon code</button></div>` : ""}
+   <form data-form="document" class="doc-form" ${ex ? "inert" : ""}>
+     <label>Type<select class="in" name="type"><option>Contrôle au lycée</option><option>Devoir Sigma F</option><option>Bulletin</option><option>Autre</option></select></label>
+     <label>Devoir concerné<select class="in" name="devoir"><option value="">—</option>${devs.map(x => `<option value="${esc(x.id)}" ${x.id === DEVOIR_A_RENDRE ? "selected" : ""}>${esc(x.titre)}</option>`).join("")}</select></label>
+     <label>Matière<select class="in" name="matiere">${MATIERES.map(m => `<option>${esc(m)}</option>`).join("")}</select></label>
+     <label>Note obtenue (si contrôle)<input class="in" name="note" inputmode="decimal" placeholder="ex. 12,5"></label>
+     <label class="full">Commentaire<input class="in" name="commentaire" maxlength="300" placeholder="ex. je n'ai pas compris l'exercice 2"></label>
+     <label class="full doc-drop">Photo ou PDF<input class="in" type="file" name="fichiers" accept="image/*,application/pdf" multiple required>
+       <span class="muted small">Sur téléphone, tu peux prendre la photo directement. 10 Mo maximum par fichier.</span></label>
+     <div class="full row-between wrap"><button class="btn" type="submit">Envoyer</button><span class="small" data-out="doc-msg" role="status"></span></div>
+   </form></section>
+   <section class="card top-gap"><h2>Mes envois</h2>${MES_DOCS.length ? `<table class="tbl"><thead><tr><th scope="col">Date</th><th scope="col">Type</th><th scope="col">Matière</th><th scope="col">Note</th><th scope="col">Suivi</th></tr></thead><tbody>
+     ${MES_DOCS.map(d => `<tr><td>${esc(fdateC(String(d.date).slice(0, 10)))}</td><td>${esc(d.type)}</td><td>${esc(d.matiere || "")}</td><td>${esc(d.note || "")}</td><td>${esc(d.statut || "à voir")}</td></tr>`).join("")}</tbody></table>`
+     : `<p class="muted">Aucun document envoyé pour l'instant.</p>`}</section>`;
+}
+
+/* photo : réduite à 1800 px en JPEG (une photo de téléphone passe de 5 Mo à ~400 Ko) ; PDF envoyé tel quel */
+function lireFichier(f) {
+  return new Promise((ok, ko) => {
+    if (f.type === "application/pdf") {
+      if (f.size > 10 * 1024 * 1024) return ko(new Error(f.name + " : PDF trop lourd (10 Mo maximum)."));
+      const r = new FileReader(); r.onload = () => ok({ type: f.type, base64: String(r.result).split(",")[1] }); r.onerror = () => ko(new Error("Lecture impossible")); r.readAsDataURL(f); return;
+    }
+    if (!/^image\//.test(f.type)) return ko(new Error(f.name + " : envoie une photo ou un PDF."));
+    const img = new Image(), u = URL.createObjectURL(f);
+    img.onload = () => {
+      const k = Math.min(1, 1800 / Math.max(img.width, img.height)), c = document.createElement("canvas");
+      c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
+      c.getContext("2d").drawImage(img, 0, 0, c.width, c.height); URL.revokeObjectURL(u);
+      ok({ type: "image/jpeg", base64: c.toDataURL("image/jpeg", 0.82).split(",")[1] });
+    };
+    img.onerror = () => ko(new Error(f.name + " : format de photo non reconnu (essaie une capture d'écran ou un PDF)."));
+    img.src = u;
+  });
+}
+async function envoyerDocuments(form) {
+  const out = form.querySelector('[data-out="doc-msg"]'), fd = new FormData(form), fichiers = [...form.querySelector('[name="fichiers"]').files];
+  if (!fichiers.length) return;
+  const meta = { type: fd.get("type"), devoir: fd.get("devoir"), matiere: fd.get("matiere"), note: String(fd.get("note") || "").trim(), commentaire: String(fd.get("commentaire") || "").trim() };
+  form.querySelector('[type="submit"]').disabled = true;
+  try {
+    for (let i = 0; i < fichiers.length; i++) {
+      out.textContent = `Envoi ${i + 1}/${fichiers.length}…`;
+      const fichier = await lireFichier(fichiers[i]);
+      const d = await appel("document", { jeton: ST.jeton, meta, fichier });
+      MES_DOCS = d.documents || MES_DOCS;
+    }
+    // un contrôle avec sa note s'ajoute aussi au « Suivi des notes »
+    const n = nb(meta.note);
+    if (/^contr/i.test(meta.type) && n !== null && n >= 0 && n <= 20) { S.notes.push({ date: TODAY, matiere: meta.matiere, notions: "", note: n, moy: null, min: null, max: null, diff: "", rem: meta.commentaire }); save(); }
+    DEVOIR_A_RENDRE = ""; toast(fichiers.length > 1 ? "Documents envoyés" : "Document envoyé"); render();
+  } catch (e) { out.textContent = e.message; form.querySelector('[type="submit"]').disabled = false; if (e.expire) { delete ST.jeton; save(); } }
+}
+
+/* vidéos ajoutées par l'équipe (YouTube…) : affichées aussi dans l'onglet Vidéos */
+function videosEquipeHtml() {
+  const v = (COMMUN.ressources || []).filter(x => /vid/i.test(x.type || ""));
+  return v.length ? `<section class="card top-gap"><h2>Vidéos ajoutées par l'équipe</h2><ul class="res-eq">${v.map(x => `<li><a href="${esc(x.url)}" target="_blank" rel="noopener">🎬 ${esc(x.titre)}</a>${x.chapitre ? ` <span class="muted small">· ${esc(x.chapitre)}</span>` : ""}</li>`).join("")}</ul></section>` : "";
+}
+
+VIEWS.splice(VIEWS.findIndex(v => v.id === "notes") + 1, 0, { id: "documents", ico: "📎", t: "Mes documents", d: "Envoie tes contrôles et tes devoirs en photo ou en PDF." });
+document.addEventListener("click", e => {
+  const b = e.target.closest("[data-rendre]");
+  if (!b) return;
+  DEVOIR_A_RENDRE = b.dataset.rendre; VIEW = "documents"; SUB = {}; render(true);
+});
+document.addEventListener("submit", e => {
+  if (e.target.dataset && e.target.dataset.form === "document") { e.preventDefault(); e.stopImmediatePropagation(); envoyerDocuments(e.target); }
+}, true);
+RENDER.documents = vDocuments;
+RENDER.videos = (f => () => f() + videosEquipeHtml())(RENDER.videos);
 function renderChrome() {
   const vs = views();
   $("side-nav").innerHTML = vs.map(v => `<button class="nav-btn" data-go="${v.id}" ${VIEW === v.id ? 'aria-current="page"' : ""}><span class="nav-ico" aria-hidden="true">${v.ico}</span>${esc(v.t)}</button>`).join("");
