@@ -623,6 +623,10 @@ label{font-size:.86rem;font-weight:700;color:var(--muted);display:grid;gap:.3rem
   .tbl th,.tbl td{padding:.45rem .4rem}
 }
 
+/* ---------- annonces et ressources de l'équipe ---------- */
+.annonces{border-left:4px solid var(--red);display:flex;flex-direction:column;gap:.6rem;margin-bottom:1rem}
+.annonces p{margin:0;line-height:1.5}
+.res-eq{margin:.5rem 0 0;padding-left:1.1rem;display:flex;flex-direction:column;gap:.35rem}
 /* ---------- écran de connexion ---------- */
 .login{position:fixed;inset:0;z-index:200;overflow:auto;display:grid;place-items:center;padding:24px 16px;
   background:var(--bg);background-image:linear-gradient(var(--grid-line) 1px,transparent 1px),linear-gradient(90deg,var(--grid-line) 1px,transparent 1px);background-size:22px 22px}
@@ -709,8 +713,9 @@ label{font-size:.86rem;font-weight:700;color:var(--muted);display:grid;gap:.3rem
 
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 <!--VOIX_EMBED-->
+<script src="config.js"></script>
 <script>
-/* Adresse du service Sigma F sur Google Cloud (Cloud Run). Vide = mode exemple seulement. */
+/* Adresse du service Sigma F (Apps Script), réglée dans config.js. Vide = mode exemple seulement. */
 const API = (window.SIGMA_API || "").replace(/\/$/, "");
 /* ============================================================
    CONTENU — programme de maths du lycée (Seconde → Terminale)
@@ -2278,7 +2283,7 @@ const KEY = "sigma-passeport-eleve-v1";
 let ST = {};
 try { ST = JSON.parse(localStorage.getItem(KEY) || "{}") || {}; } catch (e) { ST = {}; }
 ST.saisies = ST.saisies || {}; ST.vus = ST.vus || {};
-const save = () => { try { localStorage.setItem(KEY, JSON.stringify(ST)); } catch (e) { } };
+const save = () => { try { localStorage.setItem(KEY, JSON.stringify(ST)); } catch (e) { } if (typeof apresSave === "function") apresSave(); };
 const clone = o => JSON.parse(JSON.stringify(o || {}));
 const $ = id => document.getElementById(id);
 const main = () => $("main");
@@ -2320,25 +2325,63 @@ function ouvrirPasseport(p) {
   BASE.eleves = BASE.eleves.filter(e => e.code !== p.eleve.code); BASE.eleves.push(p.eleve);
   Object.assign(BASE.groupes, p.groupe || {});
   BASE.suivi = BASE.suivi || {}; BASE.suivi[p.eleve.code] = p.suivi || {};
+  // saisies de l'élève gardées en ligne : on reprend la version la plus récente (téléphone ou ordinateur)
+  const loc = ST.saisies[p.eleve.code];
+  if (p.saisies && p.saisies.data && (!loc || !(loc._maj > p.saisies.maj))) ST.saisies[p.eleve.code] = p.saisies.data;
+  COMMUN = p.commun || COMMUN;
+  appliquerCommun(p.eleve.niveau);
   setEleve(p.eleve.code);
+  dernierEnvoi = corpsSaisies();
   return true;
 }
+/* ---------- échanges avec le service Sigma F (Apps Script) ---------- */
+async function appel(action, donnees) {
+  // envoyé en texte brut : le navigateur ne fait pas de pré-vérification CORS, Apps Script l'accepte
+  const r = await fetch(API, { method: "POST", body: JSON.stringify(Object.assign({ action }, donnees)) });
+  const d = await r.json().catch(() => ({ erreur: "Réponse illisible du service." }));
+  if (d.erreur) { const e = new Error(d.erreur); e.expire = !!d.expire; throw e; }
+  return d;
+}
 async function connexionApi(code) {
-  const r = await fetch(API + "/api/connexion", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code }) });
-  const d = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(d.erreur || "Connexion impossible pour le moment.");
+  const d = await appel("connexion", { code });
   ST.jeton = d.jeton; save();
   return d.passeport;
 }
 async function rechargerApi() {
   if (!API || !ST.jeton) return;
   try {
-    const r = await fetch(API + "/api/moi", { headers: { Authorization: "Bearer " + ST.jeton } });
-    if (r.status === 401 || r.status === 403) { delete ST.jeton; save(); return; }
-    if (!r.ok) return;
-    const d = await r.json();
+    const d = await appel("moi", { jeton: ST.jeton });
     if (ouvrirPasseport(d.passeport)) render();
-  } catch (e) { /* hors ligne : on garde l'affichage actuel */ }
+  } catch (e) { if (e.expire) { delete ST.jeton; save(); } /* sinon hors ligne : on garde l'affichage actuel */ }
+}
+/* envoi des saisies de l'élève (notes au lycée, emploi du temps, BAC, entretien) 4 s après la dernière modification */
+let dernierEnvoi = "", minuterieEnvoi = null;
+function corpsSaisies() { const c = Object.assign({}, S || {}); delete c._maj; return JSON.stringify(c); }
+function apresSave() {
+  if (!API || !ST.jeton || !EL || estExemple()) return;
+  const c = corpsSaisies(); if (c === dernierEnvoi) return;
+  dernierEnvoi = c; S._maj = Date.now();
+  try { localStorage.setItem(KEY, JSON.stringify(ST)); } catch (e) { }
+  clearTimeout(minuterieEnvoi);
+  minuterieEnvoi = setTimeout(() => appel("saisie", { jeton: ST.jeton, saisies: S }).catch(e => { if (e.expire) { delete ST.jeton; save(); } }), 4000);
+}
+/* contenu géré par l'équipe dans les Google Sheets : annonces, ressources ajoutées, déroulés des séances */
+let COMMUN = { annonces: [], ressources: [], deroules: [] };
+const NIV_BQ = { "2nde": ["2nde", "seconde"], "1re": ["1re", "premiere", "première"], "tle": ["tle", "terminale"] };
+const pourMoi = v => !v || /^tous|^tout/i.test(v) || (NIV_BQ[NIV] || []).includes(String(v).toLowerCase());
+function appliquerCommun(niv) {
+  // une ligne du Sheet « déroulés » remplace la séance de même numéro ; les autres séances restent celles du site
+  const base = SEANCES[niv] = Object.assign({}, SEANCES[niv] || {});
+  (COMMUN.deroules || []).filter(d => (NIV_BQ[niv] || []).includes(String(d.niveau).toLowerCase()) && d.numero > 0)
+    .forEach(d => { const k = "p" + d.phase; base[k] = (base[k] || []).slice(); base[k][d.numero - 1] = [d.titre, d.evaluation || ""]; });
+}
+function annoncesHtml() {
+  const a = (COMMUN.annonces || []).filter(x => pourMoi(x.public) && (!x.groupe_id || String(x.groupe_id).toLowerCase() === EL.groupe));
+  return a.length ? `<section class="card annonces" aria-label="Annonces">${a.map(x => `<p><b>📣 ${esc(x.titre)}</b>${x.texte ? `<br>${esc(x.texte)}` : ""}</p>`).join("")}</section>` : "";
+}
+function ressourcesEquipeHtml() {
+  const r = (COMMUN.ressources || []).filter(x => pourMoi(x.niveau) && /^https:\/\//.test(x.url || ""));
+  return r.length ? `<section class="card top-gap"><h2>Ajouté par l'équipe Sigma F</h2><ul class="res-eq">${r.map(x => `<li><a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.titre)}</a>${x.type ? ` <span class="muted small">· ${esc(x.type)}</span>` : ""}</li>`).join("")}</ul></section>` : "";
 }
 const groupe = () => BASE.groupes[EL.groupe] || { nom: "", intervenant: "", lieu: "" };
 const estExemple = () => /^exemple-/.test(EL.code);
@@ -2769,6 +2812,9 @@ function vEntretien() {
    NAVIGATION, RENDU, ÉVÉNEMENTS
    ====================================================================== */
 const RENDER = { sommaire: vSommaire, presentation: vPresentation, tableau: vTableau, planning: vPlanning, ressources: vRessources, videos: vVideos, notes: vNotes, actions: vActions, bac: vBac, entretien: vEntretien };
+RENDER.sommaire = (f => () => annoncesHtml() + f())(RENDER.sommaire);
+RENDER.tableau = (f => () => annoncesHtml() + f())(RENDER.tableau);
+RENDER.ressources = (f => () => f() + ressourcesEquipeHtml())(RENDER.ressources);
 function renderChrome() {
   const vs = views();
   $("side-nav").innerHTML = vs.map(v => `<button class="nav-btn" data-go="${v.id}" ${VIEW === v.id ? 'aria-current="page"' : ""}><span class="nav-ico" aria-hidden="true">${v.ico}</span>${esc(v.t)}</button>`).join("");
@@ -2823,7 +2869,7 @@ document.addEventListener("click", e => {
   const a = b.dataset.act;
   if (a === "profil") return openSheet(profilSheet());
   if (a === "connexion") return montrerConnexion();
-  if (a === "deconnexion") { delete ST.jeton; save(); BASE.eleves = BASE.eleves.filter(e => /^exemple-/.test(e.code)); setEleve("exemple-1re"); closeSheet(); montrerConnexion(); return render(true); }
+  if (a === "deconnexion") { delete ST.jeton; save(); BASE.eleves = BASE.eleves.filter(e => /^exemple-/.test(e.code)); setEleve("exemple-1re"); closeSheet(); save(); location.hash = ""; return location.reload(); }
   if (a === "reset-ex" || a === "reset") { ST.saisies[EL.code] = a === "reset-ex" ? clone(EXEMPLE_SAISIE[EL.code] || {}) : {}; ST.vus[EL.code] = {}; setEleve(EL.code); closeSheet(); toast("C'est fait"); return render(); }
 });
 document.addEventListener("keydown", e => {
